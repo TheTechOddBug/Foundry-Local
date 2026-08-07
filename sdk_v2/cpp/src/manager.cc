@@ -22,7 +22,9 @@
 #include "inferencing/session/session_manager.h"
 #include "spdlog_logger.h"
 #include "telemetry/telemetry_action_tracker.h"
-#include "telemetry/telemetry_logger.h"
+#include "telemetry/one_ds_telemetry.h"
+#include "telemetry/telemetry_environment.h"
+#include "telemetry/telemetry_metadata.h"
 #include "util/string_utils.h"
 #include "utils.h"
 
@@ -302,7 +304,23 @@ Manager::Manager(const Configuration& config)
       disable_region_fallback);
   model_load_manager_ = std::make_unique<ModelLoadManager>(*ep_detector_, *logger_);
   session_manager_ = std::make_unique<SessionManager>(*logger_);
-  telemetry_ = std::make_unique<TelemetryLogger>(config_.app_name, *logger_);
+  const bool disable_nonessential_telemetry =
+      config_.disable_nonessential_telemetry ||
+      IsAdditionalOptionEnabled(config_, "DisableNonessentialTelemetry");
+  const bool telemetry_hard_disabled =
+      TelemetryEnvironment::IsCiEnvironment() || TelemetryEnvironment::IsTelemetryDisabledByEnvVar();
+  telemetry_ = std::make_unique<OneDsTelemetry>(config_.app_name, *logger_, disable_nonessential_telemetry);
+  try {
+    telemetry_->RecordProcessInfo(
+        BuildProcessInfo(BuildTelemetryMetadata(config_.app_name),
+                         !disable_nonessential_telemetry && !telemetry_hard_disabled));
+  } catch (const std::exception& ex) {
+    logger_->Log(
+        LogLevel::Warning,
+        fmt::format("telemetry ProcessInfo failed during Manager initialization: {}", ex.what()));
+  } catch (...) {
+    logger_->Log(LogLevel::Warning, "telemetry ProcessInfo failed during Manager initialization.");
+  }
   catalog_ = std::make_unique<AzureModelCatalog>(
       config_.catalog_urls,
       download_manager_->GetCacheDirectory(),
@@ -444,6 +462,13 @@ void Manager::StartWebService() {
 
   bound_urls_ = web_service_->Start(endpoints);
   web_service_running_ = true;
+  try {
+    telemetry_->StartSession();
+  } catch (const std::exception& ex) {
+    logger_->Log(LogLevel::Warning, std::string("telemetry StartSession failed: ") + ex.what());
+  } catch (...) {
+    logger_->Log(LogLevel::Warning, "telemetry StartSession failed with unknown error");
+  }
   tracker.SetStatus(ActionStatus::kSuccess);
 #else
   FL_LOG_AND_THROW(*logger_, FOUNDRY_LOCAL_ERROR_INVALID_USAGE,
@@ -470,6 +495,13 @@ void Manager::StopWebService() {
 
 #ifdef FOUNDRY_LOCAL_HAS_WEB_SERVICE
   web_service_->Stop();
+  try {
+    telemetry_->EndSession();
+  } catch (const std::exception& ex) {
+    logger_->Log(LogLevel::Warning, std::string("telemetry EndSession failed: ") + ex.what());
+  } catch (...) {
+    logger_->Log(LogLevel::Warning, "telemetry EndSession failed with unknown error");
+  }
   web_service_.reset();
   web_service_running_ = false;
   bound_urls_.clear();
