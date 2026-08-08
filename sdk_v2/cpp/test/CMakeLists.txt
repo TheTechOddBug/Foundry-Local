@@ -64,6 +64,15 @@ add_executable(foundry_local_tests
     internal_api/zip_extract_test.cc
 )
 
+if(FOUNDRY_LOCAL_HAS_EP_BOOTSTRAPPERS)
+    target_sources(foundry_local_tests PRIVATE
+        internal_api/cuda_ep_bootstrapper_test.cc
+        internal_api/ep_bundle_installer_test.cc
+        internal_api/nvml_gpu_detector_test.cc
+        internal_api/webgpu_ep_bootstrapper_test.cc
+    )
+endif()
+
 target_compile_options(foundry_local_tests PRIVATE ${FOUNDRY_LOCAL_COMPILE_OPTIONS})
 
 target_link_libraries(foundry_local_tests
@@ -71,6 +80,7 @@ target_link_libraries(foundry_local_tests
         foundry_local_static
         GTest::gtest
         httplib::httplib
+        ZLIB::ZLIB
 )
 
 # On Linux, GenAI does dlopen("libonnxruntime.so") internally. Modern GCC emits
