@@ -559,10 +559,32 @@ EpDownloadResult Manager::DownloadAndRegisterEps(const std::vector<std::string>*
                                                  const IEpBootstrapper::ProgressCallback& progress_cb) {
   auto result = ep_detector_->DownloadAndRegisterEps(names, progress_cb);
 
-  // EP registration changes which device/EP filters the catalog uses.
-  // Invalidate so the next catalog query re-fetches with updated filters.
-  if (result.success && !result.registered_eps.empty()) {
+  // EP registration changes which device/EP filters the catalog uses. Invalidate whenever at
+  // least one EP registered — including partial success, where result.success is false because
+  // another EP failed — so the next catalog query re-fetches with the updated filters.
+  if (!result.registered_eps.empty()) {
     catalog_->InvalidateCache();
+  }
+
+  // Warn if any EPs failed to download or register, but keep going: CPU is always available and
+  // any EPs that did register remain usable. This is not treated as an error.
+  if (!result.cancelled && !result.failed_eps.empty()) {
+    const auto join = [](const std::vector<std::string>& eps) {
+      std::string joined;
+      for (size_t i = 0; i < eps.size(); ++i) {
+        joined += (i ? ", " : "") + eps[i];
+      }
+      return joined;
+    };
+
+    std::string message = "Failed to download or register EP(s) [" + join(result.failed_eps) +
+                          "]; continuing with the remaining execution providers (CPU is always "
+                          "available";
+    if (!result.registered_eps.empty()) {
+      message += "; also registered: [" + join(result.registered_eps) + "]";
+    }
+    message += "). See earlier logs for the underlying cause.";
+    logger_->Log(LogLevel::Warning, message);
   }
 
   return result;
