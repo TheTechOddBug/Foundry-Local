@@ -53,7 +53,12 @@ int ApplySearchOptions(const SearchOptions& options,
 
   // Temperature
   if (options.temperature.has_value()) {
-    gen_params.SetSearchOption("temperature", static_cast<double>(*options.temperature));
+    const float temperature = *options.temperature;
+    if (!(temperature >= 0.0f && temperature <= 2.0f)) {
+      FL_THROW(FOUNDRY_LOCAL_ERROR_INVALID_ARGUMENT, "temperature must be in the range [0.0, 2.0]");
+    }
+
+    gen_params.SetSearchOption("temperature", static_cast<double>(temperature));
   }
 
   // top_p
@@ -146,6 +151,10 @@ SearchOptions SearchOptions::FromParameters(const KeyValuePairs& params) {
   };
 
   opts.temperature = try_float(FOUNDRY_LOCAL_PARAM_TEMPERATURE);
+  if (opts.temperature.has_value() && !(*opts.temperature >= 0.0f && *opts.temperature <= 2.0f)) {
+    FL_THROW(FOUNDRY_LOCAL_ERROR_INVALID_ARGUMENT, "temperature must be in the range [0.0, 2.0]");
+  }
+
   opts.top_p = try_float(FOUNDRY_LOCAL_PARAM_TOP_P);
   opts.top_k = try_int(FOUNDRY_LOCAL_PARAM_TOP_K);
   opts.max_output_tokens = try_int(FOUNDRY_LOCAL_PARAM_MAX_OUTPUT_TOKENS);
