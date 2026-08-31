@@ -34,6 +34,7 @@ class BaseModelCatalog : public ICatalog {
   ~BaseModelCatalog() override;
 
   const std::string& GetName() const override { return name_; }
+  CatalogType GetType() const override { return type_; }
 
   // ICatalog implementations — query/lookup layer
   std::vector<Model*> ListModels() const override;
@@ -48,6 +49,17 @@ class BaseModelCatalog : public ICatalog {
   void InvalidateCache() override;
 
  protected:
+  BaseModelCatalog(std::string name, CatalogType type, ILogger& logger);
+
+  /// Append a newly registered active model. Inactive tombstones are never revived.
+  Model* AppendActiveModel(Model model);
+
+  /// Remove a model from catalog lookup while retaining its storage for pointer safety.
+  bool RetireModel(const std::string& alias_or_model_id);
+
+  /// Commit an unregister operation against the exact container whose lifecycle lock is held.
+  bool CommitUnregister(Model* model, const std::string& alias_or_model_id);
+
   /// Derived classes implement this to fetch model variants from their source.
   /// Returns the full variant list. Base class handles caching and indexing.
   /// Maps to C# FetchModelInfoAsync.
@@ -74,6 +86,9 @@ class BaseModelCatalog : public ICatalog {
     return {};
   }
 
+  /// Authoritative catalogs reconcile removals and replacements from every fetched snapshot.
+  virtual bool IsAuthoritativeSnapshot() const { return false; }
+
  private:
   /// Lookup indices into the stable models_ storage.
   /// Rebuilt on refresh. Does not own any Model instances.
@@ -83,9 +98,13 @@ class BaseModelCatalog : public ICatalog {
     std::unordered_map<std::string, Model*> name_index;   // name -> latest version Model*
   };
 
-  /// Stable model storage. unique_ptr ensures addresses never change.
-  /// Models are only appended, never removed — external Model* pointers remain valid.
-  mutable std::vector<std::unique_ptr<Model>> models_;
+  struct StoredModel {
+    std::unique_ptr<Model> model;
+    bool active = true;
+  };
+
+  /// Stable append-only storage. Inactive models are tombstones retained for pointer safety.
+  mutable std::vector<StoredModel> models_;
 
   /// Atomically replaced after each index rebuild so readers always observe a complete snapshot.
   /// The free functions avoid atomic<shared_ptr> availability and alignment differences across standard libraries.
@@ -125,6 +144,7 @@ class BaseModelCatalog : public ICatalog {
   mutable std::vector<std::unique_ptr<Model>> version_query_models_;
 
   std::string name_;
+  CatalogType type_;
   ILogger& logger_;
 };
 

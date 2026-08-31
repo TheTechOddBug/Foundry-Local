@@ -45,9 +45,11 @@ add_executable(foundry_local_tests
     internal_api/http_download_test.cc
     internal_api/http_retry_test.cc
     internal_api/item_test.cc
+    internal_api/local_model_catalog_test.cc
     internal_api/local_model_scanner_test.cc
     internal_api/model_info_test.cc
     internal_api/model_info_accessors_test.cc
+    internal_api/model_construction_test.cc
     internal_api/model_io_info_test.cc
     internal_api/model_load_manager_test.cc
     internal_api/model_sorting_test.cc
@@ -63,6 +65,7 @@ add_executable(foundry_local_tests
     internal_api/azure_model_catalog_test.cc
     internal_api/telemetry_test.cc
     internal_api/tensor_test.cc
+    internal_api/time_utils_test.cc
     internal_api/chat/search_options_test.cc
     internal_api/toolcalling/tool_call_stream_accumulator_test.cc
     internal_api/toolcalling/tool_call_utils_test.cc
@@ -241,6 +244,7 @@ set_tests_properties(sdk_integration_tests PROPERTIES TIMEOUT 1200)
 # ==========================================================================
 add_executable(cache_only_tests
     test_main.cc
+    sdk_api/bring_your_own_model_e2e_test.cc
     sdk_api/cache_only_test.cc
     sdk_api/catalog_live_test.cc
     sdk_api/manager_web_service_test.cc
