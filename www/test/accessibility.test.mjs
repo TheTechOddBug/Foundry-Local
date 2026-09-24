@@ -82,6 +82,15 @@ test('model task and capability filters have associated labels', () => {
 	assert.match(modelFilters, /<Button\b[^>]*\bid="capability"[^>]*>/);
 });
 
+test('execution device filters have a shared native group label', () => {
+	const modelFilters = readSource('../src/routes/models/components/ModelFilters.svelte');
+
+	assert.match(
+		modelFilters,
+		/<fieldset>\s*<legend[^>]*>Execution Device<\/legend>[\s\S]*?\{#each availableDevices as device\}/
+	);
+});
+
 test('device and SDK selectors expose their pressed state', () => {
 	const modelFilters = readSource('../src/routes/models/components/ModelFilters.svelte');
 	const installCommand = readSource('../src/lib/components/install-command.svelte');
