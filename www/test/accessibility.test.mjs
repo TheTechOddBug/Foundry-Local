@@ -82,6 +82,14 @@ test('model task and capability filters have associated labels', () => {
 	assert.match(modelFilters, /<Button\b[^>]*\bid="capability"[^>]*>/);
 });
 
+test('device and SDK selectors expose their pressed state', () => {
+	const modelFilters = readSource('../src/routes/models/components/ModelFilters.svelte');
+	const installCommand = readSource('../src/lib/components/install-command.svelte');
+
+	assert.match(modelFilters, /aria-pressed=\{selectedDevices\.includes\(device\)\}/);
+	assert.match(installCommand, /aria-pressed=\{activeTab === tab\.key\}/);
+});
+
 test('ModelDetailsModal describes Copy ID buttons with visible model IDs', () => {
 	const modelDetailsModal = readSource('../src/routes/models/components/ModelDetailsModal.svelte');
 
