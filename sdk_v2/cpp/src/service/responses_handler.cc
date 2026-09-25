@@ -446,6 +446,9 @@ std::shared_ptr<HttpRequestHandler::OutgoingResponse> ResponsesHandler::HandleSt
     std::unique_ptr<ChatSession> session, Request session_request, const ResponseTurn& turn,
     ResponseLease lease, const ResponseCreateParams& params, const nlohmann::json& req_json) {
   auto body = std::make_shared<SseStreamBody>();
+  auto stream = body->Stream();
+  auto req = std::make_shared<Request>(std::move(session_request));
+  stream->BindRequest(req);
 
   auto initial_response =
       ResponseConverter::BuildInitialResponseObject(turn.response_id, turn.created_at, turn.model_name, params);
@@ -473,7 +476,6 @@ std::shared_ptr<HttpRequestHandler::OutgoingResponse> ResponsesHandler::HandleSt
   // visible text can start a fresh item with its own id and output_index.
 
   // Capture for background thread
-  auto body_ptr = body;
   bool should_store = params.store;
   auto& store = ctx_.response_store;
   nlohmann::json req_copy = req_json;
@@ -487,15 +489,14 @@ std::shared_ptr<HttpRequestHandler::OutgoingResponse> ResponsesHandler::HandleSt
   //
   // The lease travels into the thread: the request stays in flight until the response is committed there, so a
   // DELETE arriving mid-stream still refuses the result.
-  std::thread streaming_thread([body_ptr, &logger, &session_manager,
-                                session = std::move(session),
-                                req = std::move(session_request),
-                                turn,
-                                lease = std::move(lease),
-                                should_store, &store,
-                                req_copy = std::move(req_copy),
-                                params_copy = std::move(params_copy),
-                                &tracker]() mutable {
+  tracker.Start([stream, &logger, &session_manager,
+                 session = std::move(session),
+                 req,
+                 turn,
+                 lease = std::move(lease),
+                 should_store, &store,
+                 req_copy = std::move(req_copy),
+                 params_copy = std::move(params_copy)]() mutable {
     int seq = 2;
     std::string full_text;  // concatenation of all visible runs, used for output_text in completed_response
 
@@ -517,7 +518,7 @@ std::shared_ptr<HttpRequestHandler::OutgoingResponse> ResponsesHandler::HandleSt
     std::unordered_set<std::string> raw_envelope_call_ids;
 
     auto push_event = [&](const std::string& event_name, const StreamEvent& ev) {
-      body_ptr->Push("event: " + event_name + "\ndata: " + nlohmann::json(ev).dump() + "\n\n");
+      stream->Push("event: " + event_name + "\ndata: " + nlohmann::json(ev).dump() + "\n\n");
     };
 
     auto close_current = [&](ResponseStatus status) {
@@ -729,7 +730,14 @@ std::shared_ptr<HttpRequestHandler::OutgoingResponse> ResponsesHandler::HandleSt
 
       session->SetStreamingCallback(callback_fn);
 
-      session->ProcessRequest(req, bg_response);
+      if (stream->IsDisconnected()) {
+        lease.Release();
+        stream->Finish();
+        reg.Release();
+        return;
+      }
+
+      session->ProcessRequest(*req, bg_response);
 
       // Close whatever item is still open at end-of-generation so the SSE stream is well-formed.
       close_current(bg_response.finish_reason == FOUNDRY_LOCAL_FINISH_LENGTH
@@ -740,21 +748,24 @@ std::shared_ptr<HttpRequestHandler::OutgoingResponse> ResponsesHandler::HandleSt
           turn.response_id, turn.created_at, turn.model_name, params_copy, std::move(closed_items), full_text,
           bg_response.usage, bg_response.finish_reason);
 
-      // Publish first when storage was requested. If deletion invalidated the lease, PublishResponse throws and the
-      // stream ends with response.failed rather than claiming an unstored descendant completed successfully.
-      if (should_store) {
-        nlohmann::json response_json = completed_response;
-        PublishResponse(PublishRequest{.store = store,
-                                       .session_manager = session_manager,
-                                       .logger = logger,
-                                       .lease = lease,
-                                       .registration = reg,
-                                       .session = std::move(session),
-                                       .response_id = turn.response_id,
-                                       .model_id = turn.model_id,
-                                       .response = std::move(response_json),
-                                       .input_items = ResponseConverter::ToInputItems(req_copy),
-                                       .raw_envelope_call_ids = std::move(raw_envelope_call_ids)});
+      // The stream lock makes publication and disconnect mutually exclusive. If deletion invalidated the lease,
+      // PublishResponse throws and the stream ends with response.failed instead of claiming an unstored completion.
+      if (should_store && !stream->RunIfConnected([&] {
+            nlohmann::json response_json = completed_response;
+            PublishResponse(PublishRequest{.store = store,
+                                           .session_manager = session_manager,
+                                           .logger = logger,
+                                           .lease = lease,
+                                           .registration = reg,
+                                           .session = std::move(session),
+                                           .response_id = turn.response_id,
+                                           .model_id = turn.model_id,
+                                           .response = std::move(response_json),
+                                           .input_items = ResponseConverter::ToInputItems(req_copy),
+                                           .raw_envelope_call_ids = std::move(raw_envelope_call_ids)});
+          })) {
+        stream->Finish();
+        return;
       }
 
       const bool incomplete = completed_response.status == ResponseStatus::kIncomplete;
@@ -782,21 +793,16 @@ std::shared_ptr<HttpRequestHandler::OutgoingResponse> ResponsesHandler::HandleSt
       failed.type = StreamEventType::kResponseFailed;
       failed.sequence_number = seq++;
       failed.response = error_response;
-      body_ptr->Push("event: response.failed\ndata: " + nlohmann::json(failed).dump() + "\n\n");
+      stream->Push("event: response.failed\ndata: " + nlohmann::json(failed).dump() + "\n\n");
     }
 
     // Terminal event per spec
-    body_ptr->Push("data: [DONE]\n\n");
-    body_ptr->Finish();
+    stream->Push("data: [DONE]\n\n");
+    stream->Finish();
 
-    // Remove() detaches this thread and lets WebService teardown proceed without joining it. Release the RAII lease
-    // first so destruction of the lambda captures cannot call back into an already-destroyed ResponseStore.
+    // Release the lease before the tracker destroys the worker captures and untracks the thread.
     lease.Release();
-
-    tracker.Remove(std::this_thread::get_id());
   });
-
-  tracker.Track(std::move(streaming_thread));
 
   auto response = oatpp::web::protocol::http::outgoing::Response::createShared(
       Status::CODE_200, body);
